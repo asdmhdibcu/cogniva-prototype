@@ -3,41 +3,24 @@ import json
 import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from anthropic import Anthropic
+import google.generativeai as genai
 from supabase import create_client, Client
 
 app = Flask(__name__)
 CORS(app)
 
-anthropic = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
-# --- HELPER FUNCTIONS TO FIX LLM CRASHES ---
-
 def extract_json_from_llm(text):
-    """Safely extracts JSON from LLM output, ignoring markdown or conversational filler."""
     try:
-        # Look for JSON block within markdown
         match = re.search(r'\{[\s\S]*\}', text)
         if match:
             return json.loads(match.group(0))
         return json.loads(text)
     except Exception as e:
-        print(f"JSON Extraction Error: {e}. Raw text was: {text}")
         return None
 
-def clean_chat_history(raw_history):
-    """Ensures alternating user/assistant roles (required by Anthropic API)."""
-    clean = []
-    for msg in raw_history:
-        if not clean or clean[-1]["role"] != msg["role"]:
-            clean.append({"role": msg["role"], "content": msg["content"]})
-        else:
-            # Append to previous message if roles are identical
-            clean[-1]["content"] += "\n" + msg["content"]
-    return clean
-
-# --- PROMPTS ---
 ONBOARDING_PROMPT = """
 You are Cogniva, an adaptive pedagogical AI. You are conducting an onboarding conversation. 
 Gather info on: 1. Degree, 2. Modules, 3. Study status, 4. Strengths, 5. Interests, 6. Career goals, 7. Schedule, 8. Learning style, 9. Explanation format, 10. Baseline confidence.
@@ -65,6 +48,24 @@ You are Cogniva. Respond based on the learner's longitudinal profile and immedia
 - High engagement: connect to career goals, deepen the challenge.
 """
 
+def get_gemini_response(system_prompt, messages, json_mode=False):
+    model = genai.GenerativeModel(
+        model_name='gemini-1.5-flash',
+        system_instruction=system_prompt,
+        generation_config={"response_mime_type": "application/json"} if json_mode else {}
+    )
+    
+    formatted_messages = []
+    for msg in messages:
+        role = "model" if msg["role"] == "assistant" else "user"
+        if not formatted_messages or formatted_messages[-1]["role"] != role:
+            formatted_messages.append({"role": role, "parts": [msg["content"]]})
+        else:
+            formatted_messages[-1]["parts"][0] += "\n" + msg["content"]
+            
+    response = model.generate_content(formatted_messages)
+    return response.text
+
 @app.route('/process_turn', methods=['POST'])
 def process_turn():
     data = request.json
@@ -72,33 +73,20 @@ def process_turn():
     student_message = data.get('message')
     session_mode = data.get('session_mode', 'learning')
     
-    # 1. Profile Management
     profile_res = supabase.table("profiles").select("*").eq("student_id", student_id).execute()
     if not profile_res.data:
-        # Fix: Ensure baseline_data is stored as a valid empty dict/JSON object
         supabase.table("profiles").insert({"student_id": student_id, "baseline_data": {}}).execute()
         profile = {"baseline_data": {}, "history_confidence": [], "history_engagement": [], "history_comprehension": []}
     else:
         profile = profile_res.data[0]
 
-    # 2. History Management
     chat_res = supabase.table("conversation_logs").select("*").eq("student_id", student_id).order("created_at").execute()
-    raw_history = [{"role": row["role"], "content": row["content"]} for row in chat_res.data]
-    chat_history = clean_chat_history(raw_history)
+    chat_history = [{"role": row["role"], "content": row["content"]} for row in chat_res.data]
 
-    # --- ONBOARDING MODE ---
     if session_mode == 'onboarding':
         current_messages = chat_history + [{"role": "user", "content": student_message}]
-        current_messages = clean_chat_history(current_messages) # Ensure alternation
         
-        response = anthropic.messages.create(
-            model="claude-3-sonnet-20240229",
-            max_tokens=300,
-            system=ONBOARDING_PROMPT,
-            messages=current_messages
-        )
-        
-        reply = response.content[0].text
+        reply = get_gemini_response(ONBOARDING_PROMPT, current_messages)
         is_complete = False
         
         supabase.table("conversation_logs").insert([
@@ -110,14 +98,8 @@ def process_turn():
             is_complete = True
             reply = reply.replace("[ONBOARDING_COMPLETE]", "").strip()
             
-            extract_res = anthropic.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=500,
-                system=EXTRACTION_PROMPT,
-                messages=current_messages
-            )
-            
-            extracted_json = extract_json_from_llm(extract_res.content[0].text)
+            extract_text = get_gemini_response(EXTRACTION_PROMPT, current_messages, json_mode=True)
+            extracted_json = extract_json_from_llm(extract_text)
             if extracted_json:
                 supabase.table("profiles").update({"baseline_data": extracted_json}).eq("student_id", student_id).execute()
                 
@@ -127,23 +109,16 @@ def process_turn():
             "onboarding_complete": is_complete
         })
 
-    # --- LEARNING MODE ---
     else:
-        # Stage 1: Detection
-        detection_response = anthropic.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=150,
-            system=DETECTION_PROMPT,
-            messages=[{"role": "user", "content": student_message}]
-        )
+        detection_text = get_gemini_response(DETECTION_PROMPT, [{"role": "user", "content": student_message}], json_mode=True)
+        state_scores = extract_json_from_llm(detection_text)
         
-        state_scores = extract_json_from_llm(detection_response.content[0].text)
         if state_scores:
             confidence = float(state_scores.get("confidence", 0.5))
             engagement = float(state_scores.get("engagement", 0.5))
             comprehension = float(state_scores.get("comprehension", 0.5))
         else:
-            confidence, engagement, comprehension = 0.5, 0.5, 0.5 # Fallback
+            confidence, engagement, comprehension = 0.5, 0.5, 0.5 
 
         hist_conf = profile.get("history_confidence") or []
         hist_eng = profile.get("history_engagement") or []
@@ -165,7 +140,6 @@ def process_turn():
             "content": student_message
         }).execute()
 
-        # Stage 2: Adaptive Response
         context_string = f"""
         Learner Context: {json.dumps(profile.get('baseline_data', {}))}
         Current Turn Scores:
@@ -175,16 +149,7 @@ def process_turn():
         """
         
         current_messages = chat_history + [{"role": "user", "content": student_message}]
-        current_messages = clean_chat_history(current_messages)
-        
-        generation_response = anthropic.messages.create(
-            model="claude-3-sonnet-20240229",
-            max_tokens=800,
-            system=ADAPTIVE_PROMPT + "\n\n" + context_string,
-            messages=current_messages
-        )
-        
-        adaptive_reply = generation_response.content[0].text
+        adaptive_reply = get_gemini_response(ADAPTIVE_PROMPT + "\n\n" + context_string, current_messages)
 
         supabase.table("conversation_logs").insert({
             "student_id": student_id,
