@@ -2,7 +2,8 @@ import streamlit as st
 import requests
 import uuid
 
-API_URL = "https://your-railway-app-url.up.railway.app/process_turn" # Replace with your actual Railway URL in production
+API_URL = "http://127.0.0.1:5000/process_turn"
+
 
 st.set_page_config(page_title="Cogniva Prototype", page_icon="🧠")
 
