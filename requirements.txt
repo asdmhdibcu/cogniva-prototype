@@ -4,4 +4,4 @@ streamlit==1.33.0
 supabase==2.4.5
 requests==2.31.0
 gunicorn==21.2.0
-google-generativeai==0.5.2.
+google-generativeai>=0.5.2
