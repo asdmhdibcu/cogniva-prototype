@@ -1,6 +1,13 @@
 import streamlit as st
 import requests
 import uuid
+from supabase import create_client, Client
+import streamlit as st
+
+url: str = st.secrets["SUPABASE_URL"]
+key: str = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(url, key)
+
 
 API_URL = "http://127.0.0.1:5000/process_turn"
 
