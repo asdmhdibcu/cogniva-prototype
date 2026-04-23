@@ -50,7 +50,7 @@ You are Cogniva. Respond based on the learner's longitudinal profile and immedia
 
 def get_gemini_response(system_prompt, messages, json_mode=False):
     model = genai.GenerativeModel(
-        model_name='gemini-1.5-flash-latest',
+        model_name='gemini-2.5-flash',
         system_instruction=system_prompt,
         generation_config={"response_mime_type": "application/json"} if json_mode else {}
     )
