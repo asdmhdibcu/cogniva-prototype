@@ -6,7 +6,8 @@ import os
 # ── Page Configuration ───────────────────────────────────────────────────────
 
 st.set_page_config(
-page_title=“Cogniva”,
+page_title="Cogniva",
+
 page_icon=“🧠”,
 layout=“centered”
 )
