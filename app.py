@@ -17,7 +17,8 @@ st.set_page_config(
 
 # On Railway: set API_URL as an environment variable pointing to your Flask service
 
-API_URL = os.environ.get("API_URL", "http://127.0.0.1:5000/process_turn")
+API_URL = os.environ.get("API_URL", "http://127.0.0.1:5000/process_turn").strip()
+
 
 # ── Session State Initialisation ─────────────────────────────────────────────
 
