@@ -11,7 +11,8 @@ CORS(app)
 
 # Configure Gemini with your free API key from aistudio.google.com
 
-genai.configure(api_key=os.getenv(“GEMINI_API_KEY”))
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
 supabase: Client = create_client(os.getenv(“SUPABASE_URL”), os.getenv(“SUPABASE_KEY”))
 
 # ── SYSTEM PROMPTS ────────────────────────────────────────────────────────────
